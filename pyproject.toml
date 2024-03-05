@@ -1,0 +1,15 @@
+[project]
+name = "my-eval"
+version = "0.1.0"
+description = "Default template for PDM package"
+authors = [
+    {name = "Jan Grosser", email = "jan.grosser@bytepitch.com"},
+]
+dependencies = []
+requires-python = "==3.11.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
