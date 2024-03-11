@@ -1,8 +1,10 @@
+from collections import namedtuple
 import re
+import traceback
 from typing import Iterator
 
 
-BASE_OPERATORS = "+-*/"
+BASE_OPERATORS = "+-*/^"
 DIGITS = "0123456789."
 PARENTHESIS = "()"
 
@@ -12,7 +14,8 @@ def validate_expression(expression: str) -> bool:
     if not expression:
         raise Exception("The expression is empty")
 
-    valid_chars = "0123456789+-*/(). "
+    valid_chars = "0123456789+-*/().^ "
+
     if any(char not in valid_chars for char in expression):
         raise Exception("The expression contains invalid characters")
 
@@ -29,9 +32,9 @@ def validate_expression(expression: str) -> bool:
             parentheses_count -= 1
         # If there is an extra closing parenthesis the loop can exit
         if parentheses_count < 0:
-            raise Exception("The expression contains mismatched parentheses")
+            raise Exception("The expression contains mismatched ')' parentheses")
     if parentheses_count > 0:
-        raise Exception("The expression contains mismatched parentheses")
+        raise Exception("The expression contains mismatched '(' parentheses")
 
     return True
 
@@ -53,24 +56,24 @@ def insert_assumed_multiplication(expression: str) -> str:
 
 
 def tokenize(expression: str) -> Iterator[str]:
+    """Yields tokens from a mathematical expression."""
 
     cursor = 0
-    expecting_infix_operator = False
+    is_infix = False
 
     while cursor < len(expression):
         char = expression[cursor]
 
         # Handle unary minus
-        if not expecting_infix_operator and char == "-":
-            if char == "-":
-                yield from "(0-1)*"  # A sequence for unary negation
+        if not is_infix and char == "-":
+            yield "~"  # A sequence for unary negation
             cursor += 1
 
         # Emit base operators and separators directly
         elif char in BASE_OPERATORS or char in PARENTHESIS:
             yield char
             cursor += 1
-            expecting_infix_operator = (
+            is_infix = (
                 char == ")"
             )  # After closing parenthesis, expect infix operators (or could be end of expression)
 
@@ -81,11 +84,11 @@ def tokenize(expression: str) -> Iterator[str]:
                 cursor_end += 1
             yield expression[cursor:cursor_end]  # Emit the number as a whole token
             cursor = cursor_end
-            expecting_infix_operator = True  # After a number, we expect infix operators
+            is_infix = True  # After a number, we expect infix operators
 
         # Skip unrecognized characters and reset the infix status
         else:
-            expecting_infix_operator = False
+            is_infix = False
             cursor += 1
 
 
@@ -100,57 +103,83 @@ def is_float(token: str) -> bool:
 
 def shunting_yard(tokens: Iterator[str] | list[str]) -> list:
     """Converts infix expression to postfix expression using Shunting Yard algorithm"""
-    # A dictionary mapping each operator to its precedence level. Higher numbers mean higher precedence.
-    precedence = {"-": 10, "+": 10, "/": 20, "*": 20}
+
+    # A named tuple to hold pecedence and assiciativity of an operator
+    OperatorInfo = namedtuple("OperatorInfo", ["precedence", "associativity"])
+    operators = {
+        "+": OperatorInfo(10, "Left"),
+        "-": OperatorInfo(10, "Left"),
+        "/": OperatorInfo(20, "Left"),
+        "*": OperatorInfo(20, "Left"),
+        "~": OperatorInfo(30, "Right"),  # Unary negation
+        "^": OperatorInfo(30, "Right"),
+    }
+
     operator_stack = []
-    postfix = []
+    output_queue = []
 
     for token in tokens:
-        # If the token is a number, add it directly to the output queue. In postfix notation, numbers are output as soon as they are seen.
         if is_float(token):
-            postfix.append(token)
-        elif token in precedence:
-            while (
-                operator_stack
-                and operator_stack[-1] != "("
-                and precedence[operator_stack[-1]] >= precedence[token]
+            output_queue.append(token)
+        elif token in operators.keys():
+            while (operator_stack and operator_stack[-1] != "(") and (
+                operators[operator_stack[-1]].precedence > operators[token].precedence
+                or (
+                    operators[operator_stack[-1]].precedence
+                    == operators[token].precedence
+                    and operators[token].associativity == "Left"
+                )
             ):
-                postfix.append(operator_stack.pop())
+                output_queue.append(operator_stack.pop())
             operator_stack.append(token)
         elif token == "(":
             operator_stack.append(token)
         elif token == ")":
-            while operator_stack and operator_stack[-1] != "(":
-                postfix.append(operator_stack.pop())
+            while operator_stack[-1] != "(":
+                assert (
+                    len(operator_stack) != 0
+                ), "Invalid expression: mismatched parentheses"
+                output_queue.append(operator_stack.pop())
+            assert operator_stack[-1] == "(", "Missing opening parenthesis"
             operator_stack.pop()
-        # print("output queue", postfix)
-        # print("operators_stack", operator_stack)
 
     while operator_stack:
-        postfix.append(operator_stack.pop())
+        assert operator_stack[-1] != "(", "Missing closing parenthesis"
+        output_queue.append(operator_stack.pop())
 
-    return postfix
+    return output_queue
 
 
 def evaluate_postfix(postfix_expression: list) -> float | int:
+    """Evaluates a postfix expression and returns the result"""
     stack = []
+
     for token in postfix_expression:
         if is_float(token):
             stack.append(float(token))
+        elif token == "~":
+            stack.append(-stack.pop())
         else:
             right = stack.pop()
             left = stack.pop()
-            if token == "+":
-                stack.append(left + right)
-            elif token == "-":
-                stack.append(left - right)
-            elif token == "*":
-                stack.append(left * right)
-            elif token == "/":
-                if right == 0:
-                    raise Exception("Can't divide by 0")
-                else:
-                    stack.append(left / right)
+
+            match token:
+                case "+":
+                    stack.append(left + right)
+                case "-":
+                    stack.append(left - right)
+                case "*":
+                    stack.append(left * right)
+                case "/":
+                    if right == 0:
+                        raise Exception("Can't divide by 0")
+                    else:
+                        stack.append(left / right)
+                case "^":
+                    stack.append(left**right)
+                case _:
+                    raise Exception(f"Invalid operator: {token}")
+
     return stack.pop()
 
 
@@ -164,24 +193,22 @@ def app_main():
             break
         try:
             validate_expression(expression)
-            print(expression)
 
             expression = insert_assumed_multiplication(expression)
             print(expression)
-
-            expected = eval(expression)
 
             tokens = list(tokenize(expression))
             print(tokens)
 
             postfix = shunting_yard(tokens)
-            print("".join(postfix))
+            print(" ".join(postfix))
 
             result = evaluate_postfix(postfix)
             print(f"The result is: {result}")
-            print(f"expected is: {expected}")
-        except Exception as e:
-            print(f"Error: {e}")
+            # expected = eval(expression)
+            # print(f"expected is: {expected}")
+        except Exception:
+            traceback.print_exc()
 
 
 if __name__ == "__main__":
